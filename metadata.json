@@ -1,0 +1,8 @@
+{
+  "name": "Goblin Agent Map",
+  "description": "Interactive cyberpunk goblin tactical agent map featuring subterranean territory radar, agent dispatching, sector surveillance, and neural comm-links.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
