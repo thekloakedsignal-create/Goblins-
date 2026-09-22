@@ -10,9 +10,13 @@ import {
   VolumeX,
   Tv,
   Cpu,
-  CheckCircle2
+  CheckCircle2,
+  LogIn,
+  LogOut,
+  UserCheck
 } from "lucide-react";
 import { GoblinAgent, SectorNode } from "../types";
+import { useAuth } from "../context/AuthContext.tsx";
 
 interface MapStatsBarProps {
   agents: GoblinAgent[];
@@ -45,6 +49,7 @@ export default function MapStatsBar({
   completedJobsTotal = 0,
   playBeep
 }: MapStatsBarProps) {
+  const { user, signInWithGoogle, signOut, loading: authLoading } = useAuth();
   const activeAgents = agents.filter(a => a.status === "PROCESSING" || a.status === "DISPATCHED").length;
   const avgSignal = Math.round(sectors.reduce((acc, s) => acc + s.signalStrength, 0) / sectors.length);
 
@@ -189,6 +194,38 @@ export default function MapStatsBar({
         >
           {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
         </button>
+
+        {/* Firebase Authentication / Cloud SQL Profile */}
+        {user ? (
+          <div className="flex items-center gap-1.5 pl-1 border-l border-emerald-500/20">
+            <div 
+              className="h-8 px-2.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center gap-2 text-[11px] text-emerald-300"
+              title={`Logged in as ${user.email}`}
+            >
+              <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="hidden xl:inline max-w-[120px] truncate">{user.email?.split('@')[0]}</span>
+              <button
+                onClick={() => signOut()}
+                className="text-emerald-500/70 hover:text-emerald-200 transition-colors ml-1 p-0.5"
+                title="Sign out"
+              >
+                <LogOut className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center pl-1 border-l border-emerald-500/20">
+            <button
+              onClick={() => signInWithGoogle()}
+              disabled={authLoading}
+              className="h-8 px-2.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-tech font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-[0_0_10px_rgba(16,185,129,0.2)] disabled:opacity-50"
+              title="Sign in with Google to sync artifacts to Cloud SQL"
+            >
+              <LogIn className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Sign In</span>
+            </button>
+          </div>
+        )}
       </div>
 
     </div>

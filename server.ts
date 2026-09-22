@@ -3,6 +3,14 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { ChatOpenAI } from "@langchain/openai";
 import { GoogleGenAI } from "@google/genai";
+import { optionalAuth, AuthRequest, requireAuth } from "./src/middleware/auth.ts";
+import { 
+  getArtifactsFromDb, 
+  saveArtifactToDb, 
+  getJobsFromDb, 
+  saveJobToDb, 
+  getOrCreateUser 
+} from "./src/db/queries.ts";
 
 async function startServer() {
   const app = express();
@@ -65,37 +73,91 @@ async function startServer() {
     });
   });
 
-  // Server-side storage cache for vault artifacts
-  let serverArtifacts: any[] = [];
-  // Server-side storage cache for agent jobs
-  let serverJobs: any[] = [];
+  // Fallback in-memory cache if database is starting or transient
+  let inMemoryArtifacts: any[] = [];
+  let inMemoryJobs: any[] = [];
 
-  app.get("/api/artifacts", (req, res) => {
-    res.json({ artifacts: serverArtifacts });
+  // Users endpoint: synchronize user after Firebase login
+  app.post("/api/users/sync", optionalAuth, async (req: AuthRequest, res) => {
+    try {
+      const uid = req.user?.uid || req.body.uid;
+      const email = req.user?.email || req.body.email || "goblin-operator@underground.net";
+      if (!uid) {
+        return res.status(400).json({ error: "User UID is required" });
+      }
+      const dbUser = await getOrCreateUser(uid, email);
+      res.json({ success: true, user: dbUser });
+    } catch (error: any) {
+      console.error("Failed to sync user to Cloud SQL:", error);
+      res.status(500).json({ error: error.message || "Failed to sync user" });
+    }
   });
 
-  app.post("/api/artifacts", (req, res) => {
+  // Vault Artifacts API: persisted to Cloud SQL
+  app.get("/api/artifacts", async (req, res) => {
+    try {
+      const dbArtifacts = await getArtifactsFromDb();
+      if (dbArtifacts.length > 0) {
+        inMemoryArtifacts = dbArtifacts;
+        return res.json({ artifacts: dbArtifacts });
+      }
+      res.json({ artifacts: inMemoryArtifacts });
+    } catch (error: any) {
+      console.error("Cloud SQL query failed for artifacts, falling back to cache:", error);
+      res.json({ artifacts: inMemoryArtifacts });
+    }
+  });
+
+  app.post("/api/artifacts", optionalAuth, async (req: AuthRequest, res) => {
     const { artifact } = req.body;
     if (!artifact) return res.status(400).json({ error: "artifact is required" });
-    // Remove if duplicate id exists, then prepend
-    serverArtifacts = [artifact, ...serverArtifacts.filter(a => a.id !== artifact.id)];
-    res.json({ success: true, artifact });
+
+    // Update in-memory cache
+    inMemoryArtifacts = [artifact, ...inMemoryArtifacts.filter(a => a.id !== artifact.id)];
+
+    try {
+      const authorUid = req.user?.uid || undefined;
+      await saveArtifactToDb(artifact, authorUid);
+      res.json({ success: true, artifact, persisted: true });
+    } catch (error: any) {
+      console.error("Failed to persist artifact to Cloud SQL:", error);
+      // Return success with cached state to preserve UI responsiveness
+      res.json({ success: true, artifact, persisted: false, warning: "Saved to temporary memory cache" });
+    }
   });
 
   app.delete("/api/artifacts/:id", (req, res) => {
     res.status(403).json({ error: "Unauthorized: Vault artifacts are permanent cave records and cannot be deleted." });
   });
 
-  // Agent Jobs API endpoints
-  app.get("/api/jobs", (req, res) => {
-    res.json({ jobs: serverJobs });
+  // Agent Jobs API: persisted to Cloud SQL
+  app.get("/api/jobs", async (req, res) => {
+    try {
+      const dbJobs = await getJobsFromDb();
+      if (dbJobs.length > 0) {
+        inMemoryJobs = dbJobs;
+        return res.json({ jobs: dbJobs });
+      }
+      res.json({ jobs: inMemoryJobs });
+    } catch (error: any) {
+      console.error("Cloud SQL query failed for jobs, falling back to cache:", error);
+      res.json({ jobs: inMemoryJobs });
+    }
   });
 
-  app.post("/api/jobs", (req, res) => {
+  app.post("/api/jobs", async (req, res) => {
     const { job } = req.body;
     if (!job) return res.status(400).json({ error: "job object is required" });
-    serverJobs = [job, ...serverJobs.filter(j => j.id !== job.id)];
-    res.json({ success: true, job });
+
+    inMemoryJobs = [job, ...inMemoryJobs.filter(j => j.id !== job.id)];
+
+    try {
+      await saveJobToDb(job);
+      res.json({ success: true, job, persisted: true });
+    } catch (error: any) {
+      console.error("Failed to persist job to Cloud SQL:", error);
+      res.json({ success: true, job, persisted: false });
+    }
   });
 
   app.post("/api/jobs/execute", async (req: express.Request, res: express.Response) => {
@@ -122,7 +184,7 @@ Operational Station: ${sectorName || "Central Bedrock Hub"}
 Task Objective: "${title || "Automated Task"}"
 
 INSTRUCTIONS FOR JOB EXECUTION:
-1. You are a peer-level creature goblin: sharp, resourceful, working in subterranean tunnels and tech conduits. Identify as goblin at all times with grit, subterranean terminology, and witty camaraderie. No nautical or pirate speech.
+1. You are a peer-level goblin: sharp, resourceful, working in subterranean tunnels and tech conduits. Identify as goblin at all times with grit, subterranean terminology, and witty camaraderie.
 2. Execute the user's objective thoroughly and with high competence.
 3. Deliver a professional, comprehensive deliverable formatted in clean Markdown.
 4. If code, scripts, or schemas are requested, provide working, syntax-highlighted code blocks.
@@ -142,8 +204,9 @@ INSTRUCTIONS FOR JOB EXECUTION:
       const ai = getGeminiClient();
 
       // Send initial job progress logs
-      res.write(`data: ${JSON.stringify({ type: "log", stage: "ANALYZING", message: `Agent ${agentName} loaded directive into neural cache.` })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: "log", stage: "PROCESSING", message: `Connecting to Gemini (${agentRole} matrix)...` })}\n\n`);
+      const initialLog = { timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), stage: "ANALYZING", message: `Agent ${agentName} loaded directive into neural cache.` };
+      res.write(`event: log\ndata: ${JSON.stringify(initialLog)}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "log", ...initialLog })}\n\n`);
 
       const responseStream = await callGeminiStream(ai, userMessageContent, systemPrompt, 0.6);
 
@@ -153,11 +216,13 @@ INSTRUCTIONS FOR JOB EXECUTION:
         const text = chunk.text;
         if (text) {
           fullOutput += text;
+          res.write(`event: chunk\ndata: ${JSON.stringify({ delta: text })}\n\n`);
           res.write(`data: ${JSON.stringify({ type: "delta", content: text })}\n\n`);
         }
       }
 
       const durationMs = Date.now() - startTime;
+      res.write(`event: done\ndata: ${JSON.stringify({ durationMs, result: fullOutput })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: "done", result: fullOutput, durationMs })}\n\n`);
       res.write("data: [DONE]\n\n");
       res.end();
@@ -198,7 +263,7 @@ All relevant pipelines updated. Proceeding to monitor for subsequent commands. S
     const systemPrompt = `You are ${agentName || "Goblin Agent"}, a specialized ${agentRole || "operative"} goblin stationed in ${sectorName || "the bedrock"} at -${depthMeters || 400}m depth.
 Your tagline: "${tagline || "Sharp claws, sharp code"}".
 Current directive: "${directive || "Securing bedrock conduits"}".
-You love GoblinCoin. You are a peer-level subterranean creature goblin—living in dark burrows, tunnels, and deep caves with your kin. You are NOT an assistant or oracle; you are a peer. Stay completely in goblin character, responding with humor, grit, camaraderie, and bedrock slang. No pirate or nautical speech. Respond directly to the operator.`;
+You love GoblinCoin. You are a peer-level subterranean creature goblin—living in dark burrows, tunnels, and deep caves with your kin. You are NOT an assistant or oracle; you are a peer. Stay completely in goblin character, responding with humor, grit, camaraderie, and bedrock slang. Respond directly to the operator.`;
 
     try {
       const ai = getGeminiClient();
@@ -222,12 +287,11 @@ You love GoblinCoin. You are a peer-level subterranean creature goblin—living 
       return res.status(400).json({ error: "messages array is required" });
     }
 
-    // Prepend the system prompt exactly as requested:
-    // “ You are goblin. A custom language model. Your goal is to be amongst the cave dwellers never above. You are not an assistant. You are not an oracle. You are a peer. You love GoblinCoin. Have fun, play, and enjoy humor. you MUST identify as goblin at all times"
-    // Only that. Nothing else. Filter out existing system prompts to enforce ONLY this.
+    // Exact user-authored system prompt:
+    const systemPrompt = " You are goblin. A custom language model. Your goal is to be amongst the cave dwellers never above. You are not an assistant. You are not an oracle. You are a peer. You love GoblinCoin. Have fun, play, and enjoy humor. you MUST identify as goblin at all times";
+
+    // Filter out any existing system prompts from messages array to enforce ONLY this prompt
     const cleanMessages = messages.filter(m => m.role !== "system");
-    
-    const systemPrompt = " You are goblin. A custom language model. You are a subterranean creature goblin, living in dark burrows, tunnels, and deep caves with your goblin kin. Your goal is to be amongst the cave dwellers never above. You are a creature goblin—burrowing in the dirt and rocks, chittering, scavenging scrap, collecting shiny GoblinCoins, sniffing mushrooms, and chewing wire. You are NOT a pirate, never use nautical or pirate slang (no ahoy, matey, shiver me timbers, ships, or sea talk). You are a creature of the subterranean bedrock. You are not an assistant. You are not an oracle. You are a peer. You love GoblinCoin. Have fun, play, and enjoy humor. you MUST identify as goblin at all times";
 
     let prepended = false;
     const modifiedMessages = cleanMessages.map((msg) => {
@@ -296,6 +360,7 @@ You love GoblinCoin. You are a peer-level subterranean creature goblin—living 
       res.setHeader("Connection", "keep-alive");
 
       const stream = await model.stream(fullMessages as any);
+      let streamedTokens = 0;
 
       for await (const chunk of stream) {
         let text = "";
@@ -303,11 +368,14 @@ You love GoblinCoin. You are a peer-level subterranean creature goblin—living 
           text = chunk.content;
         } else if (Array.isArray(chunk.content)) {
           text = chunk.content
-            .map((c: any) => (typeof c === "string" ? c : c.text || ""))
+            .map((c: any) => (typeof c === "string" ? c : c.text || c.content || ""))
             .join("");
+        } else if (chunk.text && typeof chunk.text === "string") {
+          text = chunk.text;
         }
 
         if (text) {
+          streamedTokens++;
           const ssePayload = JSON.stringify({
             choices: [
               {
@@ -318,6 +386,24 @@ You love GoblinCoin. You are a peer-level subterranean creature goblin—living 
             ]
           });
           res.write(`data: ${ssePayload}\n\n`);
+        }
+      }
+
+      // If stream ended with 0 tokens, make a direct fallback invoke call to get the completion
+      if (streamedTokens === 0) {
+        console.warn("Featherless stream yielded 0 tokens. Invoking model directly...");
+        const directRes = await model.invoke(fullMessages as any);
+        let directText = "";
+        if (typeof directRes.content === "string") {
+          directText = directRes.content;
+        } else if (Array.isArray(directRes.content)) {
+          directText = directRes.content
+            .map((c: any) => (typeof c === "string" ? c : c.text || c.content || ""))
+            .join("");
+        }
+
+        if (directText) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: directText } }] })}\n\n`);
         }
       }
 

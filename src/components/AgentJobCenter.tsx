@@ -177,9 +177,6 @@ export default function AgentJobCenter({
           <div>
             <h1 className="text-sm font-bold text-emerald-300 tracking-wide flex items-center gap-2">
               AGENT JOB ORCHESTRATION PIPELINE
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/60 border border-emerald-500/30 text-emerald-400">
-                GEMINI 3.1 FLASH-LITE
-              </span>
             </h1>
             <p className="text-[11px] text-emerald-600">
               Autonomous task execution, code scraping, and deliverable synthesis

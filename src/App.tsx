@@ -17,7 +17,8 @@ import {
   BookOpen,
   Map as MapIcon,
   Radio,
-  UserPlus
+  UserPlus,
+  Bot
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "motion/react";
@@ -43,8 +44,10 @@ import DeployAgentModal from "./components/DeployAgentModal";
 import MapStatsBar from "./components/MapStatsBar";
 import AgentListRoster from "./components/AgentListRoster";
 import AgentJobCenter from "./components/AgentJobCenter";
+import { useAuth } from "./context/AuthContext.tsx";
 
 export default function App() {
+  const { token, user } = useAuth();
   // Navigation View State: jobs (default functional view), map, terminal, vault
   const [activeView, setActiveView] = useState<"jobs" | "map" | "terminal" | "vault">("jobs");
 
@@ -301,9 +304,15 @@ export default function App() {
     const updated = [newArtifact, ...artifacts];
     setArtifacts(updated);
     saveLocalArtifacts(updated);
+    
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
     fetch("/api/artifacts", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ artifact: newArtifact })
     }).catch(e => console.warn("Failed to sync artifact to server", e));
   };
@@ -863,6 +872,23 @@ export default function App() {
           }
         }
       }
+
+      // Safeguard against blank response
+      if (!accumulated.trim()) {
+        const fallbackNotice = "*Chitters and scratches ears* The cave signal flickered, but Goblin is here! Say that again, peer?";
+        setMessages(prev => prev.map(m => {
+          if (m.id === assistantMsgId) {
+            return {
+              ...m,
+              content: fallbackNotice,
+              textContent: fallbackNotice,
+              finalAnswer: fallbackNotice,
+              reasoning: ""
+            };
+          }
+          return m;
+        }));
+      }
     } catch (error: any) {
       if (error.name === "AbortError") return;
       console.error("Transmit error:", error);
@@ -1151,7 +1177,7 @@ export default function App() {
                       >
                         {!isUser && (
                           <div className="w-8 h-8 shrink-0 rounded-lg border border-emerald-500/30 bg-[#050b0c] text-emerald-400 text-xs font-bold font-tech flex items-center justify-center tracking-tighter select-none shadow-[0_0_8px_rgba(16,185,129,0.1)]">
-                            GLM
+                            <Bot className="w-4 h-4 text-emerald-400" />
                           </div>
                         )}
 
