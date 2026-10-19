@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: goblins
+    runtime: node
+    plan: free
+    branch: "main"
+    buildCommand: "npm install && npm run build"
+    startCommand: npm start
+    autoDeployTrigger: "off"
