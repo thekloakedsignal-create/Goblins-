@@ -4,7 +4,7 @@ nixPkgs = ["nodejs_22"]
 [phases.install]
 cmds = ["npm install --include=dev"]
 
-[ build^
+[phases.build]
 cmds = ["npm run build"]
 
 [start]
