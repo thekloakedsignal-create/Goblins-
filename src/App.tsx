@@ -52,7 +52,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<"jobs" | "map" | "terminal" | "vault">("jobs");
 
   // Goblin Agent Map State
-  const [sectors, setSectors] = useState<SectorNode[]>(DEFAULT_SECTORS);
+  const [sectors] = useState<SectorNode[]>(DEFAULT_SECTORS);
   const [agents, setAgents] = useState<GoblinAgent[]>(() => {
     try {
       const saved = localStorage.getItem("goblin_map_agents");
@@ -67,7 +67,7 @@ export default function App() {
   const [deployDefaultSectorId, setDeployDefaultSectorId] = useState<string | undefined>(undefined);
   const [mobilePane, setMobilePane] = useState<"map" | "roster" | "hud">("map");
 
-  // Agent Jobs State
+  // Agent Jobs State — now hydrated from the server on mount so reports survive restarts
   const [jobs, setJobs] = useState<AgentJob[]>(() => {
     try {
       const saved = localStorage.getItem("goblin_agent_jobs");
@@ -119,12 +119,43 @@ export default function App() {
     ];
   });
 
+  // Load persisted jobs from the server on mount so previously‑generated reports
+  // appear immediately, and merge server‑side jobs into localStorage.
+  useEffect(() => {
+    fetch("/api/jobs")
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data.jobs) && data.jobs.length > 0) {
+          setJobs(data.jobs);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Sync jobs to localStorage
   useEffect(() => {
     try {
       localStorage.setItem("goblin_agent_jobs", JSON.stringify(jobs));
     } catch (e) {}
   }, [jobs]);
+
+  // Persist a job result to Cloud SQL once it's complete (runs on every terminal status change)
+  useEffect(() => {
+    const pendingSave = jobs.filter(j => 
+      ["COMPLETED", "FAILED", "CANCELLED"].includes(j.status) && j.result && !persistedJobIdsRef.current.has(j.id)
+    );
+    pendingSave.forEach(j => {
+      persistedJobIdsRef.current.add(j.id);
+      fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job: j })
+      }).catch(() => {
+        persistedJobIdsRef.current.delete(j.id);
+      });
+    });
+  }, [jobs]);
+  const persistedJobIdsRef = useRef<Set<string>>(new Set());
 
   // Chat Terminal State
   const [messages, setMessages] = useState<Message[]>([
@@ -152,7 +183,6 @@ export default function App() {
   const [vaultOpen, setVaultOpen] = useState(false);
   const [ragEnabled, setRagEnabled] = useState(true);
   const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -223,7 +253,7 @@ export default function App() {
             const map = new Map();
             prev.forEach(a => map.set(a.id, a));
             data.artifacts.forEach((a: Artifact) => map.set(a.id, a));
-            const list = Array.from(map.values());
+            const list = Array.from(map.values()) as Artifact[];
             saveLocalArtifacts(list);
             return list;
           });
@@ -282,7 +312,7 @@ export default function App() {
     playBeep(880, 0.03);
     setExpandedReasoning(prev => ({
       ...prev,
-      [id]: !prev[id]
+      [id]: !prev[id] === false
     }));
   };
 
@@ -341,7 +371,7 @@ export default function App() {
 
     return { 
       reasoning: reasoning.trim(), 
-      finalAnswer: finalAnswer.trim()
+      finalAnswer: finalAnswer.trim() 
     };
   };
 
@@ -545,7 +575,6 @@ export default function App() {
                   }
                   return j;
                 }));
-
                 // Reset agent to IDLE and increment job completion count
                 setAgents(prev => prev.map(a => {
                   if (a.id === assignedAgent.id) {
@@ -850,7 +879,6 @@ export default function App() {
               if (delta) {
                 accumulated += delta;
                 const parsed = parseReasoningAndAnswer(accumulated);
-
                 setMessages(prev => {
                   return prev.map(m => {
                     if (m.id === assistantMsgId) {
@@ -1066,7 +1094,7 @@ export default function App() {
                     }}
                     className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-white border border-emerald-500/30 font-tech font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                   >
-                    Open Job Pipeline →
+                    Open Job Pipeline ↗
                   </button>
                 </div>
               </div>
@@ -1158,7 +1186,7 @@ export default function App() {
                     className="px-3 sm:px-4 py-2 rounded-xl bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-200 hover:text-white border border-emerald-400/50 text-xs font-mono font-bold tracking-wider transition-all shrink-0 cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.2)] flex items-center gap-1.5"
                   >
                     <span>OPEN VAULT</span>
-                    <span className="text-emerald-400">→</span>
+                    <span className="text-emerald-400">↗</span>
                   </motion.button>
                 </div>
 
@@ -1280,7 +1308,6 @@ export default function App() {
                     accept="image/*"
                     className="hidden"
                   />
-
                   <input
                     type="text"
                     value={inputValue}
