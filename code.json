@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "start": "node server.ts",
+    "start:worker": "node worker.ts"
+  },
+  "dependencies": {
+    "pg-boss": "^10.1.3",
+    "@e2b/code-interpreter": "^1.0.3"
+  }
+}
